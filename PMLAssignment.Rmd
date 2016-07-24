@@ -1,0 +1,182 @@
+---
+title: "Practical Machine Learning - Predicting class behavior"
+author: "Raju Muthu"
+date: "July 17, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+Most of the 'Human activity recognition research' has traditionally focused on discriminating between different activities. However, the "how (well)" investigation has been limited considering the potential useful information for a large variety of applications,such as sports training (http://groupware.les.inf.puc-rio.br/har).
+
+For the prediction of how well individuals performed the assigned exercise, a study was designed where in sensors were attached to the individuals and also to the equipment.  A group of six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions (one correctly and four incorrecty): exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+This report aims to use machine learning algoritmhs to predict the class of exercise the individuals was performing by using measurements available from devices.
+
+## Data Loading and Exploratory Analysis
+
+### Data Source
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project comes from this original source: http://groupware.les.inf.puc-rio.br/har.
+
+```{R echo=TRUE}
+library(plyr)
+library(dplyr)
+library(caret)
+library(rpart)
+library(randomForest)
+setwd("E:\\DataScience\\PML")
+trainUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+
+trainFile <- "pml-training.csv"
+testFile <- "pml-testing.csv"
+
+if(!file.exists(trainFile)){
+  download.file(trainUrl, destfile=trainFile)
+}
+
+if(!file.exists(testFile)) {
+  download.file(testUrl, destfile=testFile)
+}
+
+dt_train <- read.csv(trainFile, header=T, na.strings=c("NA","#DIV/0!",""))
+dt_test <- read.csv(testFile, header = T, na.strings=c("NA","#DIV/0!",""))
+
+dim(dt_train)
+dim(dt_test)
+```
+### Data Exploration and Cleaning
+Let us explore the data to identify the characteristics and the relative importance of other variables for the classe variable which is being predicted.
+
+```{R echo=TRUE}
+str(dt_train, list.len=15)
+table(dt_train$classe)
+prop.table(table(dt_train$user_name, dt_train$classe), 1)
+```
+Based on the above results, it can be observed that there are some columns which are related to time series and a serial number column.  Since these won't contribute towards prediction, they could be safely removed for analysis.
+```{R echo=TRUE}
+dt_train <- dt_train %>% select(-(1:7))
+dt_test <- dt_test %>% select(-(1:7))
+dim(dt_train)
+dim(dt_test)
+```
+The data columns having NAs needs to be removed so that only columns which have no NAs will be considered for analysis.
+```{R echo=TRUE}
+NonNAtrain <- dt_train %>% select(which(colSums(is.na(dt_train)) == 0))
+NonNAtest <- dt_test %>% select(which(colSums(is.na(dt_test)) == 0))
+
+dim(NonNAtrain)
+dim(NonNAtest);
+```
+### Data partition
+Because the provided testing dataset could not be used to validate the predictive model, the cleaned data is further partitioned into two parts: training dataset for data model training (60% of the data) and validate dataset (40% of the data) for validating the model.  The training will also assess the quality of the model using an "out of bag" (OOB) error estimate using cross-validation.
+
+```{R echo=TRUE}
+set.seed(761)  # for reproducibility
+inTrain <- createDataPartition(NonNAtrain$classe, p=0.6, list=FALSE)
+training <- NonNAtrain[inTrain,]
+validating <- NonNAtrain[-inTrain,]
+dim(training)
+dim(validating)
+```
+Further, identification of zero covariates in training dataset and removing from both the datasets, training and validating, is done to eliminate bias in the prediction.
+```{R echo=TRUE}
+cols <- nearZeroVar(training)
+if(length(cols) > 0) {
+  training <- training[, -cols]
+  validating <- validating[, -cols]
+}
+dim(training)
+dim(validating)
+```
+The removal of "zero covariate"" step hasn't removed any columns since earlier steps of cleanup has effectively removed least influential columns.
+
+## Prediction Models
+Two datasets created for analysis, (a) training is the training data set (it contains 11776 observations, or about 60% of the entire training data set), and (b) validating is the testing data set (it contains 7846 observations, or about 40% of the entire training data set). The dataset validating will never be looked at, and will be used only for accuracy measurements.
+
+Three popular methods: (a) Random Forests, (b) Decision Tree and (c) Generalized Boosted Model, will be applied to model the regressions (in the Training dataset) and the best one (with higher accuracy when applied to the Test dataset) will be used for the quiz predictions. A Confusion Matrix is plotted at the end of each analysis to better visualize the accuracy of the models.
+
+(a) Random Forests
+
+```{R echo=TRUE, cache=TRUE}
+set.seed(281)
+controlRF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+modFitRF <- train(classe ~ ., data=training, method="rf",
+                          trControl=controlRF)
+modFitRF$finalModel
+
+predictRF <- predict(modFitRF, newdata=validating)
+confMatRF <- confusionMatrix(predictRF, validating$classe)
+confMatRF
+```
+
+(b) Decision Tree
+```{R echo=TRUE, cache=TRUE}
+library()
+set.seed(281)
+modFitDT <- rpart(classe ~ ., data=training, method="class")
+
+predictDT <- predict(modFitDT, newdata=validating, type="class")
+confMatDT <- confusionMatrix(predictDT, validating$classe)
+confMatDT
+```
+
+(c) Generalized Boosted Model
+
+```{R echo=TRUE, cache=TRUE}
+set.seed(281)
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modFitGBM  <- train(classe ~ ., data=training, method = "gbm",
+                    trControl = controlGBM, verbose = FALSE)
+
+modFitGBM$finalModel
+
+# prediction on Test dataset
+predictGBM <- predict(modFitGBM, newdata=validating)
+confMatGBM <- confusionMatrix(predictGBM, validating$classe)
+confMatGBM
+```
+
+From the results, it can be observed that the accuracy of the 3 regression modeling methods above are:  Random Forest -> 0.9968, Decision Tree -> 0.7334, and Generalized Boosted Model -> 0.9556.  The "out of bag" (OOB) error estimate with cross validation in Random Forest model comes out as 0.91%.
+
+
+## Prediction
+Considering the prediction model with highest accurancy which is Random Forest model, prediction is peformed on the test data set.  The prediction for 20 quiz results is as shown below.
+
+```{R echo=TRUE}
+predictTestData <- predict(modFitRF, newdata=dt_test)
+predictTestData
+```
+
+## Submission
+
+
+```{R echo=TRUE, cache=TRUE}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(predictTestData)
+```
+
+## References
+The Data used for this project can be downloaded at: 
+Training set https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv 
+Test Set https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+Human Activity Recognition publication and the Major Collaborators: 
+Wallace Ugulino,Eduardo Velloso, Hugo Fuks
+Web Site: http://groupware.les.inf.puc-rio.br/har#ixzz3AR2M0igh
